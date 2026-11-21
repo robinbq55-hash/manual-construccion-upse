@@ -259,9 +259,120 @@
       `;
     }
 
-    function buildPdfReportHtml(records, docTitle, forServer = false) {
+    function parseScoreParts(scoreText) {
+      const m = String(scoreText || '').match(/(\d+)\s*\/\s*(\d+)/);
+      return m ? { earned: Number(m[1]), total: Number(m[2]) } : { earned: 0, total: 0 };
+    }
+
+    function groupRecordsByStudent(records) {
+      const map = new Map();
+      records.forEach(raw => {
+        const rec = normalizeRecordForPdf(raw);
+        const key = String(rec.studentUser || rec.studentName || 'sin_usuario').trim().toLowerCase();
+        if (!map.has(key)) {
+          map.set(key, {
+            studentName: rec.studentName || 'Estudiante',
+            studentUser: rec.studentUser || '',
+            byTopic: {},
+            extra: []
+          });
+        }
+        const g = map.get(key);
+        if (rec.studentName && g.studentName === 'Estudiante') g.studentName = rec.studentName;
+        const tid = inferTopicId(rec);
+        // Si el estudiante envió un mismo tema varias veces, conservar la entrega más reciente (viene primero)
+        if (tid) {
+          if (!g.byTopic[tid]) g.byTopic[tid] = rec;
+        } else {
+          g.extra.push(rec);
+        }
+      });
+      return Array.from(map.values()).map(g => {
+        const ordered = [6, 7, 8, 9].map(id => g.byTopic[id]).filter(Boolean).concat(g.extra);
+        return { studentName: g.studentName, studentUser: g.studentUser, records: ordered };
+      }).sort((a, b) => a.studentName.localeCompare(b.studentName, 'es'));
+    }
+
+    function renderStudentCoverSheetHtml(group) {
+      let totEarned = 0, totMax = 0;
+      const rows = group.records.map((rec, i) => {
+        const p = parseScoreParts(rec.scoreText);
+        totEarned += p.earned;
+        totMax += p.total;
+        return `<tr>
+          <td style="text-align:center">${i + 1}</td>
+          <td><strong>${esc(rec.topicTitle || 'Actividad')}</strong></td>
+          <td style="font-family:monospace">${esc(rec.folio)}</td>
+          <td>${esc(rec.timestamp)}</td>
+          <td style="text-align:center"><span class="pill">${esc(rec.scoreText || 'N/A')}</span></td>
+        </tr>`;
+      }).join('');
+      const globalPct = totMax > 0 ? Math.round((totEarned / totMax) * 100) : 0;
+      const globalScore = totMax > 0 ? `${totEarned}/${totMax} pts (${globalPct}%)` : 'Sin ítems objetivos';
+      return `
+        <div class="doc-sheet page-break">
+          <div class="doc-head">
+            <div>
+              <div class="doc-kicker">UNIVERSIDAD ESTATAL PENÍNSULA DE SANTA ELENA · INGENIERÍA CIVIL</div>
+              <h1>Recopilación de Cuestionarios — Uso Exclusivo del Capacitador</h1>
+              <div class="doc-topic">Manual de Construcción Tomo II · Resumen General del Estudiante</div>
+            </div>
+            <div class="doc-folio">
+              <div><strong>Temas enviados:</strong> ${group.records.length} de 4</div>
+              <div><strong>Generado:</strong> ${esc(new Date().toLocaleString('es-EC'))}</div>
+            </div>
+          </div>
+          <div class="stu-bar">
+            <div><strong>Estudiante:</strong> ${esc(group.studentName)}</div>
+            <div><strong>Usuario:</strong> @${esc(group.studentUser || 'N/A')}</div>
+            <div><strong>Acumulado Objetivo:</strong> <span class="pill">${esc(globalScore)}</span></div>
+          </div>
+          <div class="sec">
+            <h3>Resumen de Temas Entregados por el Estudiante</h3>
+            <table>
+              <thead><tr><th style="width:7%;text-align:center">#</th><th>Tema</th><th>Folio</th><th>Fecha de Envío</th><th style="text-align:center">Puntaje Objetivo</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          <div class="grade-box">
+            <div class="grade-title">CONSOLIDADO FINAL DEL CAPACITADOR</div>
+            <div class="grade-grid">
+              <div><strong>Total Objetivo Acumulado:</strong> ${esc(globalScore)}</div>
+              <div><strong>Calificación Preguntas Escritas / Planos:</strong> _________ / _________</div>
+              <div><strong>NOTA FINAL DEL ESTUDIANTE:</strong> _________ / _________</div>
+              <div><strong>Fecha de Revisión:</strong> _____ / _____ / 202___</div>
+            </div>
+            <div class="obs-lines">
+              <strong>Observaciones Generales:</strong>
+              <div class="line"></div>
+              <div class="line"></div>
+            </div>
+            <div class="sign-row">
+              <div class="sign-col"><div class="sign-line"></div><span>Nombre y Firma del Capacitador</span></div>
+              <div class="sign-col"><div class="sign-line"></div><span>Visto Bueno / Coordinación</span></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function buildPdfReportHtml(records, docTitle, forServer = false, groupByStudent = false) {
       window.__pdfServer = !!forServer;
-      const sheets = records.map((r, i) => renderRecordSectionHtml(r, i, records.length)).join('');
+      let sheets = '';
+      if (groupByStudent) {
+        const groups = groupRecordsByStudent(records);
+        const parts = [];
+        groups.forEach((g, gIdx) => {
+          parts.push(renderStudentCoverSheetHtml(g));
+          g.records.forEach((rec, rIdx) => {
+            const isVeryLast = (gIdx === groups.length - 1) && (rIdx === g.records.length - 1);
+            parts.push(renderRecordSectionHtml(rec, isVeryLast ? 0 : 0, isVeryLast ? 1 : 2));
+          });
+        });
+        sheets = parts.join('');
+      } else {
+        sheets = records.map((r, i) => renderRecordSectionHtml(r, i, records.length)).join('');
+      }
       return `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -315,7 +426,7 @@
 </head>
 <body>
   ${forServer ? '' : `<div class="toolbar">
-    <div><strong>Informe Único de Respuestas listo para PDF</strong><p>Pulsa el botón y selecciona <em>"Guardar como PDF"</em> (o imprime directamente para calificación física).</p></div>
+    <div><strong>Informe Recopilatorio para Capacitador (PDF)</strong><p>Pulsa el botón y selecciona <em>"Guardar como PDF"</em> (o imprime directamente para calificación).</p></div>
     <button onclick="window.print()">Guardar como PDF / Imprimir</button>
   </div>`}
   ${sheets}
@@ -324,7 +435,11 @@
 </html>`;
     }
 
-    function openPdfWindow(records, titleText) {
+    function openPdfWindow(records, titleText, groupByStudent = false) {
+      if (typeof IS_TEACHER !== 'undefined' && !IS_TEACHER) {
+        showToast('El informe con respuestas y calificaciones es exclusivo para capacitadores.', 'error');
+        return;
+      }
       if (!records || !records.length) {
         showToast('Aún no hay respuestas enviadas para generar el PDF.', 'error');
         return;
@@ -335,40 +450,41 @@
         return;
       }
       win.document.open();
-      win.document.write(buildPdfReportHtml(records, titleText, false));
+      win.document.write(buildPdfReportHtml(records, titleText, false, groupByStudent));
       win.document.close();
     }
 
-    function generateStudentConsolidatedPDF() {
-      const userKey = SESSION.user || 'invitado';
-      const mine = submissionsLog.filter(s => (s.studentUser || userKey) === userKey);
-      if (!mine.length) {
-        showToast('Primero envía al menos un tema con el botón "Verificar y Enviar Tarea" para generar tu PDF único.', 'error');
-        return;
-      }
-      const latestByTopic = {};
-      mine.forEach(rec => {
-        const tid = inferTopicId(rec);
-        if (tid && !latestByTopic[tid]) latestByTopic[tid] = rec;
-      });
-      const ordered = [6, 7, 8, 9].map(id => latestByTopic[id]).filter(Boolean);
-      const list = ordered.length ? ordered : mine;
-      openPdfWindow(list, 'PDF_Unico_' + (studentData.name || userKey).replace(/\s+/g, '_'));
-    }
-
     function generateAllSubmissionsPDF() {
+      if (!IS_TEACHER) { showToast('Acción exclusiva del capacitador.', 'error'); return; }
       const list = remoteMode ? remoteRows : submissionsLog;
       if (!list.length) {
-        showToast('No hay entregas registradas para generar el PDF único.', 'error');
+        showToast('No hay entregas registradas para generar el PDF recopilatorio.', 'error');
         return;
       }
-      openPdfWindow(list, 'PDF_Unico_Entregas_UPSE_TomoII');
+      openPdfWindow(list, 'Recopilacion_Estudiantes_UPSE_TomoII', true);
+    }
+
+    async function openStudentConsolidatedPDF(usuario, nombre) {
+      if (!IS_TEACHER) { showToast('Acción exclusiva del capacitador.', 'error'); return; }
+      if (SESSION.api && !remoteMode) {
+        await loadRemoteSubmissions();
+      }
+      const source = remoteMode ? remoteRows : submissionsLog;
+      const uKey = String(usuario || '').trim().toLowerCase();
+      const mine = source.filter(r => String(r.usuario || r.studentUser || '').trim().toLowerCase() === uKey);
+      if (!mine.length) {
+        showToast(`El estudiante @${usuario} aún no tiene cuestionarios enviados.`, 'info');
+        return;
+      }
+      const safeName = String(nombre || usuario).replace(/[^a-zA-Z0-9_-]+/g, '_');
+      openPdfWindow(mine, 'Recopilacion_' + safeName, true);
     }
 
     function openRemoteRecordPDF(idx) {
+      if (!IS_TEACHER) { showToast('Acción exclusiva del capacitador.', 'error'); return; }
       const r = remoteRows[idx];
       if (!r) return;
-      openPdfWindow([r], 'Respuestas_' + (r.folio || 'UPSE'));
+      openPdfWindow([r], 'Respuestas_' + (r.folio || 'UPSE'), false);
     }
   </script>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%232F5597'/%3E%3Ctext x='32' y='43' font-family='Arial' font-weight='700' font-size='30' text-anchor='middle' fill='white'%3EII%3C/text%3E%3C/svg%3E" />
@@ -807,10 +923,7 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
             <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
               <div id="actProgressBar" class="h-full bg-upse-gold transition-all duration-500 rounded-full" style="width: 0%"></div>
             </div>
-            <button type="button" onclick="generateStudentConsolidatedPDF()" class="mt-2 w-full px-3 py-1.5 rounded-lg bg-upse-blue hover:bg-blue-800 text-white text-[11px] font-bold transition flex items-center justify-center gap-1.5">
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-              <span>Generar PDF Único de mis Respuestas</span>
-            </button>
+            <p class="mt-1.5 text-[11px] font-medium text-slate-500">Las respuestas enviadas son evaluadas por el capacitador.</p>
           </div>
         </div>
 
@@ -832,7 +945,7 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
         <div>
           <span id="actPagesPill" class="inline-block px-2.5 py-0.5 rounded-full bg-white/15 text-white text-xs font-bold mb-1">Páginas 43–45</span>
           <h2 id="actSectionTitle" class="text-lg sm:text-xl font-extrabold">Tema 6: Estructuras — Ejercicios Prácticos</h2>
-          <p class="text-xs text-blue-100 mt-0.5">Resuelve cada bloque interactivo, adjunta tu archivo de evidencia/plano y pulsa "Verificar y Enviar Tarea".</p>
+          <p class="text-xs text-blue-100 mt-0.5">Resuelve cada bloque interactivo, adjunta tu archivo de evidencia/plano y pulsa "Enviar Cuestionario".</p>
         </div>
         <button onclick="openCurrentTopicInBook()" class="shrink-0 px-3.5 py-2 rounded-xl bg-white/15 hover:bg-white/25 border border-white/20 text-xs font-bold transition flex items-center gap-1.5 self-start sm:self-center">
           <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -847,13 +960,13 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
         <!-- Renderizado dinámicamente -->
       </div>
 
-      <!-- Comprobante y Retroalimentación de Envío -->
+      <!-- Comprobante de Envío -->
       <div id="activityReceiptBox" class="hidden rounded-2xl border p-5 animate-fade"></div>
 
-      <!-- Barra de Acción: Reiniciar / Verificar y Enviar -->
+      <!-- Barra de Acción: Reiniciar / Enviar -->
       <div class="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
         <p class="text-xs text-slate-500">
-          Al enviar, se califican automáticamente las preguntas objetivas, líneas y cubicaciones, y se registra tu archivo adjunto.
+          Al enviar, tus respuestas y archivo adjunto quedan registrados de forma segura para revisión del capacitador.
         </p>
         <div class="flex flex-wrap items-center gap-2.5 w-full sm:w-auto justify-end">
           <button type="button" onclick="resetCurrentActivity()" class="px-4 py-2.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-bold transition">
@@ -863,7 +976,7 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span id="submitTopicBtnText">Verificar y Enviar Tarea del Tema 6</span>
+            <span id="submitTopicBtnText">Enviar Cuestionario del Tema 6</span>
           </button>
         </div>
       </div>
@@ -876,14 +989,14 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
       <!-- Encabezado del Panel -->
       <div class="bg-gradient-to-r from-upse-navy to-slate-800 text-white rounded-2xl p-6 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <span class="text-[11px] uppercase tracking-wider font-bold text-amber-300">Gestión Docente · Control de Entregas</span>
-          <h2 class="text-xl font-extrabold mt-0.5">Panel del Capacitador</h2>
-          <p class="text-xs text-slate-300 mt-1">Revisa las calificaciones automáticas, visualiza o descarga los archivos adjuntos (fotos/PDF) y conecta tu Google Drive.</p>
+          <span id="panelRoleKicker" class="text-[11px] uppercase tracking-wider font-bold text-amber-300">Gestión Docente · Control de Entregas</span>
+          <h2 id="panelRoleTitle" class="text-xl font-extrabold mt-0.5">Panel del Capacitador</h2>
+          <p class="text-xs text-slate-300 mt-1">Revisa las calificaciones automáticas, visualiza o descarga los archivos adjuntos (fotos/PDF) y genera el PDF recopilatorio por estudiante.</p>
         </div>
         <div class="flex flex-wrap gap-2">
           <button onclick="generateAllSubmissionsPDF()" class="px-4 py-2.5 rounded-xl bg-white text-upse-navy hover:bg-blue-50 text-xs font-extrabold shadow-sm transition flex items-center gap-1.5">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-            <span>Generar PDF Único (Todas las Entregas)</span>
+            <span>PDF Recopilatorio (Por Estudiante)</span>
           </button>
           <button onclick="exportCSV()" class="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition flex items-center gap-1.5">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
@@ -892,30 +1005,30 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
             <span>Exportar Todo a CSV (Excel)</span>
           </button>
           <button onclick="loadRemoteSubmissions()" class="px-4 py-2.5 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold border border-white/20 transition">Actualizar desde Google Sheets</button>
-          <button onclick="clearAllSubmissions()" class="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-rose-600 text-white text-xs font-bold border border-white/20 transition">
+          <button data-admin-only="true" onclick="clearAllSubmissions()" class="px-3.5 py-2.5 rounded-xl bg-white/10 hover:bg-rose-600 text-white text-xs font-bold border border-white/20 transition">
             Limpiar Historial Local
           </button>
         </div>
       </div>
 
-      <!-- Registro de Claves de Acceso y Generador del Administrador -->
+      <!-- Registro de Participantes, Roles y Claves -->
       <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         <div class="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h3 class="text-sm font-extrabold text-upse-navy">Claves de Acceso Registradas (<span id="adminUsersCount">0</span>)</h3>
-            <p class="text-xs text-slate-500 mt-0.5">Consulta aquí el usuario (<code>Nombre##</code>) y clave (<code>UPSE####</code>) de cualquier participante si lo olvida, o genera uno nuevo.</p>
+            <h3 class="text-sm font-extrabold text-upse-navy">Participantes y Roles (<span id="adminUsersCount">0</span>)</h3>
+            <p id="adminUsersSub" class="text-xs text-slate-500 mt-0.5">Consulta participantes, descarga su PDF recopilatorio o asigna el rol de <strong>Capacitador</strong> desde aquí.</p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
             <input id="adminUserSearch" type="text" oninput="renderAdminUsersTable()" placeholder="Buscar nombre o usuario..."
               class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-upse-blue" />
             <button type="button" onclick="loadRemoteUsers()" class="px-3.5 py-1.5 rounded-xl bg-upse-blue hover:bg-blue-800 text-white text-xs font-bold transition">
-              Actualizar Claves
+              Actualizar Lista
             </button>
           </div>
         </div>
 
         <!-- Generador rápido desde el Panel del Administrador -->
-        <div class="px-5 py-3.5 bg-slate-50 border-b border-slate-200">
+        <div data-admin-only="true" class="px-5 py-3.5 bg-slate-50 border-b border-slate-200">
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
             <div>
               <label class="block text-[11px] font-bold text-slate-600 mb-1">Nombres completos (dos nombres)</label>
@@ -938,7 +1051,8 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
                 <th class="px-4 py-3 font-bold">#</th>
                 <th class="px-4 py-3 font-bold">Nombres y Apellidos</th>
                 <th class="px-4 py-3 font-bold">Usuario</th>
-                <th class="px-4 py-3 font-bold">Clave de Acceso</th>
+                <th class="px-4 py-3 font-bold">Rol</th>
+                <th data-admin-only="true" class="px-4 py-3 font-bold">Clave de Acceso</th>
                 <th class="px-4 py-3 font-bold">Fecha</th>
                 <th class="px-4 py-3 font-bold">Acciones</th>
               </tr>
@@ -973,8 +1087,8 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
         </div>
       </div>
 
-      <!-- Integración Google Sheets y Google Drive (Apps Script) -->
-      <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-5">
+      <!-- Integración Google Sheets y Google Drive (Apps Script) — solo Administrador -->
+      <div data-admin-only="true" class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-6 space-y-5">
         <div class="border-b border-slate-100 pb-3">
           <h3 class="text-base font-extrabold text-upse-navy">Conexión Automática con Google Sheets y Google Drive</h3>
           <p class="text-xs text-slate-600 mt-1">Conecta tu Web App de Google Apps Script para validar usuarios y contraseñas, guardar las calificaciones en tu hoja de cálculo y los archivos subidos (JPG, PNG, WEBP, PDF) en una carpeta de tu Google Drive.</p>
@@ -2473,7 +2587,8 @@ function listarEntregas_() {
 
     // Sesión iniciada en login.html
     const SESSION = window.__SESSION || { user: 'invitado', name: '', role: 'estudiante', token: '', api: '', exp: 0 };
-    const IS_TEACHER = SESSION.role === 'capacitador';
+    const IS_ADMIN = SESSION.role === 'admin';
+    const IS_TEACHER = SESSION.role === 'admin' || SESSION.role === 'capacitador';
     // Los borradores y el progreso se guardan POR USUARIO (varios estudiantes pueden usar el mismo equipo)
     const K = (n) => 'upse2_' + SESSION.user + '_' + n;
 
@@ -2730,10 +2845,17 @@ function listarEntregas_() {
 
     function applySession() {
       document.getElementById('ucName').textContent = SESSION.name || SESSION.user;
-      document.getElementById('ucRole').textContent = IS_TEACHER ? 'Capacitador' : 'Estudiante';
+      document.getElementById('ucRole').textContent = IS_ADMIN ? 'Administrador' : (IS_TEACHER ? 'Capacitador' : 'Estudiante');
       if (!IS_TEACHER) {
         const t = document.getElementById('mainTab_instructor'); if (t) t.remove();
         const sec = document.getElementById('section_instructor'); if (sec) sec.remove();
+      } else if (IS_ADMIN) {
+        const pt = document.getElementById('panelRoleTitle'); if (pt) pt.textContent = 'Panel del Administrador';
+        const pk = document.getElementById('panelRoleKicker'); if (pk) pk.textContent = 'Administración General · Roles y Entregas';
+      } else {
+        document.querySelectorAll('[data-admin-only="true"]').forEach(el => el.remove());
+        const sub = document.getElementById('adminUsersSub');
+        if (sub) sub.textContent = 'Consulta los participantes registrados y genera el PDF recopilatorio de sus respuestas.';
       }
       // El nombre viene de la cuenta y no se puede cambiar (evita suplantación)
       const fill = (id, val) => {
@@ -2788,7 +2910,7 @@ function listarEntregas_() {
           <td class="px-4 py-3 font-semibold text-upse-blue">${esc(r.tema)}</td>
           <td class="px-4 py-3"><span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-extrabold">${esc(r.puntaje)}</span></td>
           <td class="px-4 py-3">${link}</td>
-          <td class="px-4 py-3"><div class="flex flex-wrap gap-1.5"><button type="button" onclick="openRemoteRecordPDF(${idx})" class="px-2.5 py-1 rounded-lg bg-upse-navy text-white font-bold hover:bg-upse-blue transition">Generar PDF</button>${pdfDrive}${IS_TEACHER ? `<button type="button" onclick="deleteSubmissionRecord(${idx}, true)" class="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 transition">Eliminar</button>` : ''}</div></td></tr>`;
+          <td class="px-4 py-3"><div class="flex flex-wrap gap-1.5"><button type="button" onclick="openRemoteRecordPDF(${idx})" class="px-2.5 py-1 rounded-lg bg-upse-navy text-white font-bold hover:bg-upse-blue transition">Generar PDF</button>${pdfDrive}${IS_ADMIN ? `<button type="button" onclick="deleteSubmissionRecord(${idx}, true)" class="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 transition">Eliminar</button>` : ''}</div></td></tr>`;
       }).join('');
     }
 
@@ -2845,6 +2967,7 @@ function listarEntregas_() {
       } else if (sectionName === 'instructor') {
         renderInstructorPanel();
         if (SESSION.api && !remoteUsersLoaded) loadRemoteUsers();
+        if (SESSION.api && !remoteMode) loadRemoteSubmissions();
       }
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -3025,7 +3148,7 @@ function listarEntregas_() {
 
       document.getElementById('actPagesPill').textContent = act.pages;
       document.getElementById('actSectionTitle').textContent = act.fullTitle;
-      document.getElementById('submitTopicBtnText').textContent = `Verificar y Enviar Tarea del Tema ${act.id}`;
+      document.getElementById('submitTopicBtnText').textContent = `Enviar Cuestionario del Tema ${act.id}`;
 
       let html = '';
 
@@ -3604,22 +3727,15 @@ function listarEntregas_() {
       let earned = 0;
       let total = 0;
 
+      // Cálculo interno silencioso (solo visible para el capacitador en Sheets, Drive y PDF docente)
       // 1. MC
       if (act.mcQuestions) {
         act.mcQuestions.forEach(q => {
           total++;
           const ans = draft.mc[q.id];
+          if (ans === q.correct) earned++;
           const fb = document.getElementById(`fb_${q.id}`);
-          if (ans === q.correct) {
-            earned++;
-            if (fb) {
-              fb.className = 'text-xs p-2.5 rounded-xl font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 block';
-              fb.textContent = `✓ Correcto. ${q.hint}`;
-            }
-          } else if (fb) {
-            fb.className = 'text-xs p-2.5 rounded-xl font-semibold bg-rose-50 text-rose-800 border border-rose-200 block';
-            fb.textContent = `✕ Incorrecto. Respuesta correcta: ${q.options[q.correct]} — ${q.hint}`;
-          }
+          if (fb) { fb.className = 'hidden'; fb.textContent = ''; }
         });
       }
 
@@ -3627,29 +3743,19 @@ function listarEntregas_() {
       if (act.ordering) {
         act.ordering.items.forEach(it => {
           total++;
-          const ok = draft.ordering[it.id] === it.correctOrder;
-          if (ok) earned++;
+          if (draft.ordering[it.id] === it.correctOrder) earned++;
           const fb = document.getElementById(`ofb_${it.id}`);
-          if (fb) {
-            fb.className = `text-[11px] font-bold block ${ok ? 'text-emerald-700' : 'text-rose-700'}`;
-            fb.textContent = ok ? `✓ Orden correcto (${it.correctOrder}°)` : `✕ Corresponde al paso ${it.correctOrder}°`;
-          }
+          if (fb) { fb.className = 'hidden'; fb.textContent = ''; }
         });
       }
 
       // 3. Checklist / V-F
       if (act.checklist) {
-        const isVF = !!act.checklist.vfMode;
         act.checklist.items.forEach(it => {
           total++;
-          const ok = draft.checklist[it.id] === it.expected;
-          if (ok) earned++;
+          if (draft.checklist[it.id] === it.expected) earned++;
           const fb = document.getElementById(`cfb_${it.id}`);
-          if (fb) {
-            const expLbl = it.expected ? (isVF ? 'Verdadero' : '✓ Correcto') : (isVF ? 'Falso' : '✕ Incorrecto');
-            fb.className = `text-[11px] font-bold block ${ok ? 'text-emerald-700' : 'text-rose-700'}`;
-            fb.textContent = ok ? `✓ Correcto (${expLbl})` : `✕ Incorrecto · Esperado: ${expLbl}`;
-          }
+          if (fb) { fb.className = 'hidden'; fb.textContent = ''; }
         });
       }
 
@@ -3659,17 +3765,9 @@ function listarEntregas_() {
           nb.fields.forEach(f => {
             total++;
             const v = draft.numeric[f.id];
+            if (typeof v === 'number' && !isNaN(v) && Math.abs(v - f.expected) <= f.tol) earned++;
             const fb = document.getElementById(`nfb_${f.id}`);
-            if (typeof v === 'number' && !isNaN(v) && Math.abs(v - f.expected) <= f.tol) {
-              earned++;
-              if (fb) {
-                fb.className = 'text-[11px] mt-1.5 font-bold text-emerald-700 block';
-                fb.textContent = `✓ Correcto (${f.formula})`;
-              }
-            } else if (fb) {
-              fb.className = 'text-[11px] mt-1.5 font-bold text-rose-700 block';
-              fb.textContent = `✕ Esperado: ${f.expected.toFixed(2)} ${f.unit} (${f.formula})`;
-            }
+            if (fb) { fb.className = 'hidden'; fb.textContent = ''; }
           });
         });
       }
@@ -3682,15 +3780,13 @@ function listarEntregas_() {
         });
       }
 
-      // 6. Plano estructural (Tema 9, Act. 1)
+      // 6. Plano estructural (Tema 9, Act. 1 — sin revelar aciertos/errores al estudiante)
       if (act.blueprintActivity) {
-        bpReview = {};
+        bpReview = null;
         BP_TARGETS.forEach(t => {
           total++;
           const zId = (draft.blueprint || {})[t.id];
-          const ok = zId === t.zoneId;
-          bpReview[t.id] = ok;
-          if (ok) earned++;
+          if (zId === t.zoneId) earned++;
         });
         bpTool = null;
         renderBlueprintUi();
@@ -3714,7 +3810,7 @@ function listarEntregas_() {
         uploadedFile: uploadedFile ? { ...uploadedFile } : null
       };
 
-      submittedTopics[act.id] = { folio, scoreText, timestamp };
+      submittedTopics[act.id] = { folio, timestamp };
       submissionsLog.unshift(record);
 
       // Guardar (si el archivo es muy grande para el navegador, se guarda el registro sin el adjunto)
@@ -3730,34 +3826,26 @@ function listarEntregas_() {
       renderActivityTopicTabs();
       updateProgressIndicators();
 
-      // Mostrar Comprobante
+      // Mostrar Comprobante de Envío (sin respuestas correctas ni puntaje)
       const box = document.getElementById('activityReceiptBox');
       box.className = 'rounded-2xl border-2 border-emerald-300 bg-emerald-50 p-5 text-emerald-950 space-y-2 animate-fade';
       box.innerHTML = `
         <div class="flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-2">
-            <span class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-extrabold">✓ TAREA REGISTRADA</span>
+            <span class="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-xs font-extrabold">✓ CUESTIONARIO ENVIADO</span>
             <span class="text-xs font-mono font-bold text-emerald-900">Folio: ${folio}</span>
           </div>
-          <span class="px-3 py-1 rounded-full bg-white border border-emerald-300 text-emerald-800 text-xs font-extrabold">Puntaje Automático: ${scoreText}</span>
+          <span class="px-3 py-1 rounded-full bg-white border border-emerald-300 text-emerald-800 text-xs font-bold">Registrado para revisión del capacitador</span>
         </div>
-        <p class="text-xs"><strong>Estudiante:</strong> ${esc(record.studentName)} · <strong>Fecha:</strong> ${timestamp}</p>
+        <p class="text-xs"><strong>Estudiante:</strong> ${esc(record.studentName)} · <strong>Tema:</strong> ${esc(record.topicTitle)} · <strong>Fecha:</strong> ${timestamp}</p>
         <p class="text-xs"><strong>Archivo adjunto:</strong> ${uploadedFile ? `${esc(uploadedFile.name)} (${formatFileSize(uploadedFile.size)})` : 'Sin archivo adjunto'}</p>
-        <div class="pt-2 flex flex-wrap gap-2">
-          <button type="button" onclick="openPdfWindow([submissionsLog[0]], 'Respuestas_' + submissionsLog[0].folio)" class="px-4 py-2 rounded-xl bg-upse-blue hover:bg-blue-800 text-white text-xs font-extrabold transition flex items-center gap-1.5">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-            <span>Descargar / Imprimir PDF de este Tema</span>
-          </button>
-          <button type="button" onclick="generateStudentConsolidatedPDF()" class="px-4 py-2 rounded-xl bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 text-xs font-extrabold transition flex items-center gap-1.5">
-            <span>Generar PDF Único (Todos los Temas Enviados)</span>
-          </button>
-        </div>
+        <p class="text-xs text-emerald-800 pt-1">Tus respuestas han sido enviadas correctamente. La revisión y calificación estará a cargo del capacitador.</p>
       `;
 
-      // Envío a Google Apps Script (compatible con GitHub Pages HTTPS sin preflight CORS)
+      // Envío a Google Apps Script (el PDF con preguntas, respuestas y clave se guarda solo en Drive del capacitador)
       if (webhookUrl) {
         try {
-          const pdfHtml = buildPdfReportHtml([record], 'Respuestas_' + record.folio, true);
+          const pdfHtml = buildPdfReportHtml([record], 'Respuestas_' + record.folio, true, false);
           const resp = await fetch(webhookUrl, {
             method: 'POST',
             redirect: 'follow',
@@ -3766,17 +3854,17 @@ function listarEntregas_() {
           });
           const resData = await resp.json();
           if (resData && resData.status === 'ok') {
-            showToast(`¡Tarea enviada con éxito a Google Sheets/Drive! (${scoreText})`, 'success');
+            showToast('¡Cuestionario enviado correctamente al capacitador!', 'success');
           } else if (resData && resData.code === 'sesion') {
-            showToast('Guardada localmente, pero tu sesión en el servidor venció. Vuelve a iniciar sesión para sincronizar.', 'error');
+            showToast('Guardado localmente, pero tu sesión venció. Vuelve a iniciar sesión para sincronizar.', 'error');
           } else {
-            showToast((resData && resData.message) || 'Guardada localmente. El servidor reportó un problema al guardar en Drive.', 'error');
+            showToast((resData && resData.message) || 'Guardado localmente. El servidor reportó un problema al sincronizar.', 'error');
           }
         } catch (err) {
-          showToast('Guardada localmente. Verifica tu conexión o la URL del Web App de Google Apps Script.', 'error');
+          showToast('Guardado localmente. Verifica tu conexión a internet e inténtalo de nuevo.', 'error');
         }
       } else {
-        showToast(`¡Tarea verificada y guardada! Puntaje: ${scoreText}`, 'success');
+        showToast('¡Cuestionario enviado y registrado correctamente!', 'success');
       }
     }
 
@@ -3843,7 +3931,7 @@ function listarEntregas_() {
           <td class="px-4 py-3">
             <div class="flex flex-wrap gap-1.5">
               <button type="button" onclick="openPdfWindow([submissionsLog[${idx}]], 'Respuestas_' + submissionsLog[${idx}].folio)" class="px-2.5 py-1 rounded-lg bg-upse-navy text-white font-bold hover:bg-upse-blue transition">Generar PDF</button>
-              ${IS_TEACHER ? `<button type="button" onclick="deleteSubmissionRecord(${idx}, false)" class="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 transition">Eliminar</button>` : ''}
+              ${IS_ADMIN ? `<button type="button" onclick="deleteSubmissionRecord(${idx}, false)" class="px-2.5 py-1 rounded-lg bg-rose-600 text-white font-bold hover:bg-rose-700 transition">Eliminar</button>` : ''}
             </div>
           </td>
         </tr>
@@ -3911,7 +3999,7 @@ function listarEntregas_() {
 
     let _clearArmed = null;
     function clearAllSubmissions() {
-      if (!IS_TEACHER) { showToast('Acción exclusiva del administrador.', 'error'); return; }
+      if (!IS_ADMIN) { showToast('Acción exclusiva del administrador.', 'error'); return; }
       if (!_clearArmed) {
         showToast('Pulsa «Limpiar» otra vez en los próximos 5 segundos para borrar todo el historial.', 'info');
         _clearArmed = setTimeout(() => { _clearArmed = null; }, 5000);
@@ -3976,7 +4064,7 @@ function listarEntregas_() {
     }
 
     async function adminGenerateKey() {
-      if (!IS_TEACHER) { showToast('Acción exclusiva del administrador.', 'error'); return; }
+      if (!IS_ADMIN) { showToast('Acción exclusiva del administrador.', 'error'); return; }
       const nomEl = document.getElementById('admGenNombres');
       const apeEl = document.getElementById('admGenApellidos');
       const btn = document.getElementById('admGenBtn');
@@ -4050,32 +4138,107 @@ function listarEntregas_() {
           )
         : source;
 
+      const colSpan = IS_ADMIN ? 7 : 6;
       cnt.textContent = source.length;
       if (!filtered.length) {
-        tb.innerHTML = `<tr><td colspan="6" class="px-4 py-8 text-center text-slate-400 font-medium">${
+        tb.innerHTML = `<tr><td colspan="${colSpan}" class="px-4 py-8 text-center text-slate-400 font-medium">${
           source.length ? 'No hay coincidencias con tu búsqueda.' : 'Aún no hay participantes registrados. Genera una clave arriba o pide a los estudiantes registrarse.'
         }</td></tr>`;
         return;
       }
 
-      tb.innerHTML = filtered.map((u, idx) => `
+      tb.innerHTML = filtered.map((u, idx) => {
+        const rolNorm = String(u.rol || 'estudiante').trim().toLowerCase();
+        const isCap = rolNorm === 'capacitador';
+        const isAdmRow = rolNorm === 'admin' || String(u.usuario || '').toLowerCase() === 'admin_upse';
+        const rolBadge = isAdmRow
+          ? '<span class="px-2 py-0.5 rounded-full bg-upse-navy text-white text-[10.5px] font-extrabold">Administrador</span>'
+          : (isCap
+              ? '<span class="px-2 py-0.5 rounded-full bg-upse-blue text-white text-[10.5px] font-extrabold">Capacitador</span>'
+              : '<span class="px-2 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-slate-600 text-[10.5px] font-bold">Estudiante</span>');
+        const nextRole = isCap ? 'estudiante' : 'capacitador';
+        const roleBtnLabel = isCap ? 'Quitar Capacitador' : 'Hacer Capacitador';
+        const roleBtnCls = isCap
+          ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
+          : 'bg-upse-blue hover:bg-blue-800 text-white';
+        return `
         <tr class="hover:bg-slate-50 transition">
           <td class="px-4 py-2.5 text-slate-500 font-semibold">${idx + 1}</td>
           <td class="px-4 py-2.5 font-bold text-slate-800">${esc(u.nombreCompleto || '')}</td>
           <td class="px-4 py-2.5"><span class="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 font-mono font-bold text-upse-navy">${esc(u.usuario || '')}</span></td>
-          <td class="px-4 py-2.5"><span class="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 font-mono font-extrabold text-amber-900">${esc(u.clave || '')}</span></td>
+          <td class="px-4 py-2.5">${rolBadge}</td>
+          ${IS_ADMIN ? `<td class="px-4 py-2.5"><span class="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 font-mono font-extrabold text-amber-900">${esc(u.clave || '')}</span></td>` : ''}
           <td class="px-4 py-2.5 text-[11px] text-slate-500">${esc(u.fecha || '')}</td>
           <td class="px-4 py-2.5">
             <div class="flex flex-wrap gap-1.5">
-              <button type="button" onclick="copyUserCredentialsForWA('${esc(u.nombreCompleto || '')}','${esc(u.usuario || '')}','${esc(u.clave || '')}')" class="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition">Copiar WhatsApp</button>
-              ${IS_TEACHER && String(u.usuario || '').toLowerCase() !== 'admin_upse'
+              <button type="button" onclick="openStudentConsolidatedPDF('${esc(u.usuario || '')}','${esc(u.nombreCompleto || '')}')" class="px-2.5 py-1 rounded-lg bg-upse-navy hover:bg-upse-blue text-white font-bold transition">PDF Respuestas</button>
+              ${IS_ADMIN && !isAdmRow
+                ? `<button type="button" onclick="toggleUserRole('${esc(u.usuario || '')}','${esc(u.nombreCompleto || '')}','${nextRole}')" class="px-2.5 py-1 rounded-lg ${roleBtnCls} font-bold transition">${roleBtnLabel}</button>`
+                : ''
+              }
+              ${IS_ADMIN
+                ? `<button type="button" onclick="copyUserCredentialsForWA('${esc(u.nombreCompleto || '')}','${esc(u.usuario || '')}','${esc(u.clave || '')}')" class="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition">Copiar WhatsApp</button>`
+                : ''
+              }
+              ${IS_ADMIN && !isAdmRow
                 ? `<button type="button" onclick="deleteAdminUser('${esc(u.usuario || '')}','${esc(u.nombreCompleto || '')}')" class="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold transition">Eliminar</button>`
                 : ''
               }
             </div>
           </td>
-        </tr>
-      `).join('');
+        </tr>`;
+      }).join('');
+    }
+
+    async function toggleUserRole(usuario, nombreCompleto, nextRole) {
+      if (!IS_ADMIN) { showToast('Acción permitida únicamente para el administrador.', 'error'); return; }
+      const uKey = String(usuario || '').trim();
+      if (!uKey || uKey.toLowerCase() === 'admin_upse') return;
+      const rolLabel = nextRole === 'capacitador' ? 'Capacitador' : 'Estudiante';
+      const ok = confirm(
+        nextRole === 'capacitador'
+          ? `¿Asignar rol de CAPACITADOR a "${nombreCompleto || uKey}" (@${uKey})?\n\nPodrá entrar al Panel del Capacitador para revisar entregas y descargar los PDFs con respuestas y claves.`
+          : `¿Cambiar a "${nombreCompleto || uKey}" (@${uKey}) nuevamente a rol ESTUDIANTE?\n\nPerderá acceso al Panel del Capacitador y a los PDFs con respuestas.`
+      );
+      if (!ok) return;
+
+      if (SESSION.api) {
+        showToast(`Actualizando rol de @${uKey} a ${rolLabel}…`, 'info');
+        try {
+          const r = await fetch(SESSION.api, {
+            method: 'POST',
+            redirect: 'follow',
+            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+            body: JSON.stringify({
+              action: 'cambiar_rol',
+              token: SESSION.token,
+              usuario: uKey,
+              rol: nextRole
+            })
+          });
+          const d = await r.json();
+          if (d.status !== 'ok') {
+            if (d.code === 'sesion') { showToast('Tu sesión expiró. Vuelve a ingresar.', 'error'); setTimeout(logout, 1500); }
+            else showToast(d.message || 'No se pudo actualizar el rol.', 'error');
+            return;
+          }
+          remoteUsers = remoteUsers.map(u =>
+            String(u.usuario || '').toLowerCase() === uKey.toLowerCase() ? { ...u, rol: nextRole } : u
+          );
+          renderAdminUsersTable();
+          showToast(`@${uKey} ahora tiene rol de ${rolLabel}. Surtirá efecto en su próximo inicio de sesión.`, 'success');
+        } catch (e) {
+          showToast('No se pudo conectar con Google Sheets para cambiar el rol.', 'error');
+        }
+        return;
+      }
+
+      const list = getLocalRegisteredUsers().map(u =>
+        String(u.usuario || '').toLowerCase() === uKey.toLowerCase() ? { ...u, rol: nextRole } : u
+      );
+      saveLocalRegisteredUsers(list);
+      renderAdminUsersTable();
+      showToast(`@${uKey} ahora tiene rol de ${rolLabel}.`, 'success');
     }
 
     async function copyUserCredentialsForWA(nombre, usuario, clave) {
@@ -4088,7 +4251,7 @@ function listarEntregas_() {
     }
 
     async function deleteAdminUser(usuario, nombreCompleto) {
-      if (!IS_TEACHER) { showToast('Acción permitida únicamente para el administrador.', 'error'); return; }
+      if (!IS_ADMIN) { showToast('Acción permitida únicamente para el administrador.', 'error'); return; }
       const uKey = String(usuario || '').trim();
       if (!uKey) return;
       if (uKey.toLowerCase() === 'admin_upse') {
@@ -4166,7 +4329,7 @@ function listarEntregas_() {
     }
 
     async function deleteSubmissionRecord(idx, isRemote) {
-      if (!IS_TEACHER) { showToast('Acción permitida únicamente para el administrador.', 'error'); return; }
+      if (!IS_ADMIN) { showToast('Acción permitida únicamente para el administrador.', 'error'); return; }
       const list = isRemote ? remoteRows : submissionsLog;
       const rec = list[idx];
       if (!rec) return;

@@ -448,7 +448,7 @@ async function authenticate(user, pass) {
   }
 
   if (uLower === ADMIN_CONFIG.user.toLowerCase() && sha256(uLower + ':' + pTrim) === ADMIN_CONFIG.hash) {
-    return { perfil: { usuario: ADMIN_CONFIG.user, nombre: ADMIN_CONFIG.name, rol: 'capacitador' }, token: '', api: '' };
+    return { perfil: { usuario: ADMIN_CONFIG.user, nombre: ADMIN_CONFIG.name, rol: 'admin' }, token: '', api: '' };
   }
 
   const list = getLocalUsers();
@@ -490,9 +490,10 @@ $('f').addEventListener('submit', async (ev) => {
       showErr(res.error, ['u', 'p']); $('p').value = ''; $('p').focus(); return;
     }
     const p = res.perfil;
+    const roleNorm = (p.rol === 'admin' || p.rol === 'capacitador') ? p.rol : 'estudiante';
     saveSession({
       user: p.usuario || user, name: p.nombre,
-      role: p.rol === 'capacitador' ? 'capacitador' : 'estudiante',
+      role: roleNorm,
       token: res.token, api: res.api, exp: Date.now() + SESSION_HOURS * 3600 * 1000
     });
     location.href = 'manual.html';
