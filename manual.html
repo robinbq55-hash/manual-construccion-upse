@@ -809,6 +809,10 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
           <span class="hidden sm:inline">Actividades y Tareas</span><span class="sm:hidden">Actividades</span>
           <span id="navProgressBadge" class="badge">0/4</span>
         </button>
+        <a id="mainTab_group" href="grupo.html" class="tab">
+          <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" /></svg>
+          <span class="hidden sm:inline">Grupo y Contacto</span><span class="sm:hidden">Grupo</span>
+        </a>
         <button id="mainTab_instructor" onclick="switchMainSection('instructor')" class="tab">
           <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
           <span class="hidden sm:inline">Panel del Capacitador</span><span class="sm:hidden">Capacitador</span>
@@ -1019,7 +1023,7 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
             <p id="adminUsersSub" class="text-xs text-slate-500 mt-0.5">Consulta participantes, descarga su PDF recopilatorio o asigna el rol de <strong>Capacitador</strong> desde aquí.</p>
           </div>
           <div class="flex flex-wrap items-center gap-2">
-            <input id="adminUserSearch" type="text" oninput="renderAdminUsersTable()" placeholder="Buscar nombre o usuario..."
+            <input id="adminUserSearch" type="text" oninput="renderAdminUsersTable()" placeholder="Buscar nombre, usuario o correo..."
               class="px-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-upse-blue" />
             <button type="button" onclick="loadRemoteUsers()" class="px-3.5 py-1.5 rounded-xl bg-upse-blue hover:bg-blue-800 text-white text-xs font-bold transition">
               Actualizar Lista
@@ -1029,7 +1033,7 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
 
         <!-- Generador rápido desde el Panel del Administrador -->
         <div data-admin-only="true" class="px-5 py-3.5 bg-slate-50 border-b border-slate-200">
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-end">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 items-end">
             <div>
               <label class="block text-[11px] font-bold text-slate-600 mb-1">Nombres completos (dos nombres)</label>
               <input id="admGenNombres" type="text" placeholder="Ej.: Carlos Andrés" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-upse-blue" />
@@ -1037,6 +1041,10 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
             <div>
               <label class="block text-[11px] font-bold text-slate-600 mb-1">Apellidos completos (dos apellidos)</label>
               <input id="admGenApellidos" type="text" placeholder="Ej.: Mendoza Vera" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-upse-blue" />
+            </div>
+            <div>
+              <label class="block text-[11px] font-bold text-slate-600 mb-1">Correo electrónico (opcional)</label>
+              <input id="admGenCorreo" type="email" placeholder="Ej.: estudiante@correo.com" class="w-full px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs focus:outline-none focus:ring-2 focus:ring-upse-blue" />
             </div>
             <button type="button" id="admGenBtn" onclick="adminGenerateKey()" class="px-4 py-2 rounded-xl bg-upse-navy hover:bg-upse-blue text-white text-xs font-extrabold transition">
               + Generar Usuario y Clave
@@ -1051,6 +1059,7 @@ body{background-image:linear-gradient(rgba(47,85,151,.05) 1px,transparent 1px),l
                 <th class="px-4 py-3 font-bold">#</th>
                 <th class="px-4 py-3 font-bold">Nombres y Apellidos</th>
                 <th class="px-4 py-3 font-bold">Usuario</th>
+                <th class="px-4 py-3 font-bold">Correo</th>
                 <th class="px-4 py-3 font-bold">Rol</th>
                 <th data-admin-only="true" class="px-4 py-3 font-bold">Clave de Acceso</th>
                 <th class="px-4 py-3 font-bold">Fecha</th>
@@ -4067,11 +4076,17 @@ function listarEntregas_() {
       if (!IS_ADMIN) { showToast('Acción exclusiva del administrador.', 'error'); return; }
       const nomEl = document.getElementById('admGenNombres');
       const apeEl = document.getElementById('admGenApellidos');
+      const corEl = document.getElementById('admGenCorreo');
       const btn = document.getElementById('admGenBtn');
       const nombres = nomEl.value.trim().replace(/\s+/g, ' ');
       const apellidos = apeEl.value.trim().replace(/\s+/g, ' ');
+      const correo = corEl ? corEl.value.trim().toLowerCase() : '';
       if (!nombres || !apellidos) {
         showToast('Ingresa los dos nombres y dos apellidos del participante.', 'error');
+        return;
+      }
+      if (correo && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(correo)) {
+        showToast('El correo electrónico ingresado no tiene un formato válido.', 'error');
         return;
       }
       btn.disabled = true;
@@ -4082,18 +4097,22 @@ function listarEntregas_() {
           const r = await fetch(SESSION.api, {
             method: 'POST',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify({ action: 'registro', nombres, apellidos })
+            body: JSON.stringify({ action: 'registro', nombres, apellidos, correo, permitirSinCorreo: true, token: SESSION.token })
           });
           const d = await r.json();
           if (d.status !== 'ok') { showToast(d.message || 'No se pudo generar la clave.', 'error'); return; }
           created = d;
           remoteUsers.unshift({
             usuario: d.usuario, clave: d.clave, nombres: d.nombres, apellidos: d.apellidos,
-            nombreCompleto: d.nombreCompleto, rol: 'estudiante', fecha: d.fecha
+            nombreCompleto: d.nombreCompleto, correo: d.correo || correo, rol: 'estudiante', fecha: d.fecha
           });
           remoteUsersLoaded = true;
         } else {
           const list = getLocalRegisteredUsers();
+          if (correo && list.some(item => String(item.correo || '').trim().toLowerCase() === correo)) {
+            showToast('Este correo electrónico ya está registrado en otra cuenta.', 'error');
+            return;
+          }
           const base = normalizeFirstNameAdm(nombres);
           const reUser = new RegExp('^' + base.toLowerCase() + '(\\d+)$');
           let maxU = 0, maxC = 0;
@@ -4107,13 +4126,14 @@ function listarEntregas_() {
             usuario: base + String(maxU + 1).padStart(2, '0'),
             clave: 'UPSE' + String(maxC + 1).padStart(4, '0'),
             nombres, apellidos, nombreCompleto: nombres + ' ' + apellidos,
-            rol: 'estudiante', fecha: new Date().toLocaleString('es-EC')
+            correo, rol: 'estudiante', fecha: new Date().toLocaleString('es-EC')
           };
           list.unshift(created);
           saveLocalRegisteredUsers(list);
         }
         nomEl.value = '';
         apeEl.value = '';
+        if (corEl) corEl.value = '';
         renderAdminUsersTable();
         showToast(`Clave generada: ${created.usuario} / ${created.clave}`, 'success');
       } catch (e) {
@@ -4134,11 +4154,12 @@ function listarEntregas_() {
         ? source.filter(u =>
             String(u.nombreCompleto || '').toLowerCase().includes(q) ||
             String(u.usuario || '').toLowerCase().includes(q) ||
+            String(u.correo || '').toLowerCase().includes(q) ||
             String(u.clave || '').toLowerCase().includes(q)
           )
         : source;
 
-      const colSpan = IS_ADMIN ? 7 : 6;
+      const colSpan = IS_ADMIN ? 8 : 7;
       cnt.textContent = source.length;
       if (!filtered.length) {
         tb.innerHTML = `<tr><td colspan="${colSpan}" class="px-4 py-8 text-center text-slate-400 font-medium">${
@@ -4161,11 +4182,15 @@ function listarEntregas_() {
         const roleBtnCls = isCap
           ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
           : 'bg-upse-blue hover:bg-blue-800 text-white';
+        const correoCell = u.correo
+          ? `<a href="mailto:${esc(u.correo)}" class="text-upse-blue hover:underline font-medium break-all">${esc(u.correo)}</a>`
+          : '<span class="text-slate-400">—</span>';
         return `
         <tr class="hover:bg-slate-50 transition">
           <td class="px-4 py-2.5 text-slate-500 font-semibold">${idx + 1}</td>
           <td class="px-4 py-2.5 font-bold text-slate-800">${esc(u.nombreCompleto || '')}</td>
           <td class="px-4 py-2.5"><span class="px-2 py-0.5 rounded bg-blue-50 border border-blue-200 font-mono font-bold text-upse-navy">${esc(u.usuario || '')}</span></td>
+          <td class="px-4 py-2.5 text-[11.5px] text-slate-600">${correoCell}</td>
           <td class="px-4 py-2.5">${rolBadge}</td>
           ${IS_ADMIN ? `<td class="px-4 py-2.5"><span class="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 font-mono font-extrabold text-amber-900">${esc(u.clave || '')}</span></td>` : ''}
           <td class="px-4 py-2.5 text-[11px] text-slate-500">${esc(u.fecha || '')}</td>

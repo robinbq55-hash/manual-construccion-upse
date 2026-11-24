@@ -1,0 +1,11 @@
+# Evitar subir el PDF pesado del libro (~14 MB) a GitHub Pages
+Manual_Construccion_TomoII_UPSE.pdf
+*.pdf
+
+# Mantener el código del servidor de Google Apps Script (y sus claves) fuera del repositorio público
+Code.gs
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
